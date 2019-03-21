@@ -1,0 +1,8 @@
+[package]
+name = "port-scanner"
+version = "0.1.0"
+authors = ["teruya <abas.trace.on@gmail.com>"]
+edition = "2018"
+
+[dependencies]
+pnet = "0.22.0"
