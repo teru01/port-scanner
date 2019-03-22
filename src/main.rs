@@ -5,16 +5,16 @@ use pnet::datalink;
 use pnet::datalink::Channel;
 use pnet::datalink::MacAddr;
 use std::net::Ipv4Addr;
-use std::{ env, thread, io, time };
+use std::{ env };
 
 extern crate rand;
 extern crate serde;
 extern crate rayon;
-use rayon::prelude::*;
 
 const TCP_SIZE: usize = 20;
 const IP_SIZE: usize = 20 + TCP_SIZE;
 const ETHERNET_SIZE: usize = 14 + IP_SIZE;
+const MAXIMU_PORT_NUM: u16 = 1000;
 
 fn main() {
     let args: Vec<String> = env::args().collect();
@@ -44,13 +44,14 @@ fn main() {
             panic!("Failed to create datalink channel {}", e)
         }
     };
-    // rayon::join(|| send_packet(&myaddr, &addr, my_port), oper_b: B)
-    send_packet(&mut tx, &myaddr, &addr, my_port);
+    rayon::join(|| send_packet(&mut tx, &myaddr, &addr, my_port),
+                || receive_packets(&mut rx, &addr, &myaddr, my_port)
+    );
 }
 
 fn send_packet(tx: &mut Box<dyn datalink::DataLinkSender>, myaddr: &Ipv4Addr, addr: &Ipv4Addr, my_port: u16) {
     let mut packet = build_my_packet(myaddr, addr, my_port, tcp::TcpFlags::SYN);
-    for i in 50..100 {
+    for i in 1..MAXIMU_PORT_NUM {
         let mut tcp_packet = tcp::MutableTcpPacket::new(&mut packet[ETHERNET_SIZE-TCP_SIZE..]).unwrap();
         reregister_destination_port(i, &mut tcp_packet, myaddr, addr);
         tx.send_to(&packet, None);
@@ -63,46 +64,49 @@ fn reregister_destination_port(n: u16, tcp_packet: &mut tcp::MutableTcpPacket, m
     tcp_packet.set_checksum(checksum);
 }
 
-// fn receive_packets(rx: datalink::DataLinkReceiver, addr: &Ipv4Addr, myaddr: &Ipv4Addr) -> Result<(), io::Error> {
-//     loop {
-//         let frame = match rx.next() {
-//             Ok(frame) => frame,
-//             Err(_) => {
-//                 continue
-//             }
-//         };
-//         let frame = ethernet::EthernetPacket::new(frame).unwrap();
-//         match frame.get_ethertype() {
-//             ethernet::EtherTypes::Ipv4 => {
-//                 if let Some(packet) = ipv4::Ipv4Packet::new(frame.payload()) {
-//                     if !(&packet.get_source() == &addr && &packet.get_destination() == &myaddr) {
-//                         continue;
-//                     }
-//                     let tcp = match packet.get_next_level_protocol() {
-//                         ip::IpNextHeaderProtocols::Tcp => {
-//                             if let Some(tcp) = tcp::TcpPacket::new(packet.payload()) {
-//                                 tcp
-//                             } else {
-//                                 continue
-//                             }
-//                         }
-//                         _ => continue
-//                     };
+fn receive_packets(rx: &mut Box<dyn datalink::DataLinkReceiver>, addr: &Ipv4Addr, myaddr: &Ipv4Addr, myport: u16) {
+    loop {
+        let frame = match rx.next() {
+            Ok(frame) => frame,
+            Err(_) => {
+                continue
+            }
+        };
+        let frame = ethernet::EthernetPacket::new(frame).unwrap();
+        match frame.get_ethertype() {
+            ethernet::EtherTypes::Ipv4 => {
+                if let Some(packet) = ipv4::Ipv4Packet::new(frame.payload()) {
+                    if !(&packet.get_source() == addr && &packet.get_destination() == myaddr) {
+                        continue;
+                    }
+                    let tcp = match packet.get_next_level_protocol() {
+                        ip::IpNextHeaderProtocols::Tcp => {
+                            if let Some(tcp) = tcp::TcpPacket::new(packet.payload()) {
+                                tcp
+                            } else {
+                                continue
+                            }
+                        }
+                        _ => continue
+                    };
 
-//                     if tcp.get_destination() == my_port {
-//                         let target_port = tcp.get_source();
-//                         if tcp.get_flags() == tcp::TcpFlags::SYN | tcp::TcpFlags::ACK {
-//                             println!("port {} is open", target_port);
-//                         } else if tcp.get_flags() == tcp::TcpFlags::RST | tcp::TcpFlags::ACK {
-//                             println!("port {} is close", target_port);
-//                         }
-//                     }
-//                 }
-//             },
-//             _ => {}
-//         }
-//     }
-// }
+                    if tcp.get_destination() == myport {
+                        let target_port = tcp.get_source();
+                        if tcp.get_flags() == tcp::TcpFlags::SYN | tcp::TcpFlags::ACK {
+                            println!("port {} is open", target_port);
+                        } else if tcp.get_flags() == tcp::TcpFlags::RST | tcp::TcpFlags::ACK {
+                            // println!("port {} is close", target_port);
+                        }
+                        if target_port == MAXIMU_PORT_NUM - 1 {
+                            return;
+                        }
+                    }
+                }
+            },
+            _ => {}
+        }
+    }
+}
 
 fn build_my_packet(myaddr: &Ipv4Addr, addr: &Ipv4Addr, source_port: u16, tcp_flag: u16) -> [u8; ETHERNET_SIZE]{
     let mut ethernet_buffer = [0u8; ETHERNET_SIZE];
