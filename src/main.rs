@@ -5,7 +5,7 @@ use pnet::datalink;
 use pnet::datalink::Channel;
 use pnet::datalink::MacAddr;
 use std::net::Ipv4Addr;
-use std::{ env };
+use std::{ env, thread, time };
 
 extern crate rand;
 extern crate serde;
@@ -14,7 +14,7 @@ extern crate rayon;
 const TCP_SIZE: usize = 20;
 const IP_SIZE: usize = 20 + TCP_SIZE;
 const ETHERNET_SIZE: usize = 14 + IP_SIZE;
-const MAXIMU_PORT_NUM: u16 = 1000;
+const MAXIMUM_PORT_NUM: u16 = 1000;
 
 fn main() {
     let args: Vec<String> = env::args().collect();
@@ -23,10 +23,14 @@ fn main() {
         std::process::exit(1);
     }
 
-    let myaddr: Ipv4Addr = "192.168.11.22".parse().unwrap();
-    let addr: Ipv4Addr = args[1].parse().unwrap();
-    let _method = &args[2];
-    let my_port = 33333;
+    let packet_info = PacketInfo {
+        my_macaddr: "f4:0f:24:27:db:00".parse().unwrap(),
+        default_gateway: "88:57:ee:b5:80:53".parse().unwrap(),
+        my_ipaddr: "192.168.11.22".parse().unwrap(),
+        target_ipaddr: args[1].parse().unwrap(),
+        my_port: 33333,
+        tcp_flag: tcp::TcpFlags::SYN
+    };
 
     let interface_name = env::args().nth(3).unwrap();
 
@@ -44,27 +48,41 @@ fn main() {
             panic!("Failed to create datalink channel {}", e)
         }
     };
-    rayon::join(|| send_packet(&mut tx, &myaddr, &addr, my_port),
-                || receive_packets(&mut rx, &addr, &myaddr, my_port)
+    rayon::join(|| send_packet(&mut tx, &packet_info),
+                || receive_packets(&mut rx, &packet_info)
     );
 }
 
-fn send_packet(tx: &mut Box<dyn datalink::DataLinkSender>, myaddr: &Ipv4Addr, addr: &Ipv4Addr, my_port: u16) {
-    let mut packet = build_my_packet(myaddr, addr, my_port, tcp::TcpFlags::SYN);
-    for i in 1..MAXIMU_PORT_NUM {
+
+struct PacketInfo {
+    my_macaddr: datalink::MacAddr,
+    default_gateway: datalink::MacAddr,
+    my_ipaddr: Ipv4Addr,
+    target_ipaddr: Ipv4Addr,
+    my_port: u16,
+    tcp_flag: u16
+}
+
+
+
+fn send_packet(tx: &mut Box<dyn datalink::DataLinkSender>, packet_info: &PacketInfo) {
+
+    let mut packet = build_my_packet(packet_info);
+    for i in 1..MAXIMUM_PORT_NUM {
         let mut tcp_packet = tcp::MutableTcpPacket::new(&mut packet[ETHERNET_SIZE-TCP_SIZE..]).unwrap();
-        reregister_destination_port(i, &mut tcp_packet, myaddr, addr);
+        reregister_destination_port(i, &mut tcp_packet, packet_info);
+        thread::sleep(time::Duration::from_millis(5));
         tx.send_to(&packet, None);
     }
 }
 
-fn reregister_destination_port(n: u16, tcp_packet: &mut tcp::MutableTcpPacket, myaddr: &Ipv4Addr, addr: &Ipv4Addr) {
+fn reregister_destination_port(n: u16, tcp_packet: &mut tcp::MutableTcpPacket, packet_info: &PacketInfo) {
     tcp_packet.set_destination(n);
-    let checksum = tcp::ipv4_checksum(&tcp_packet.to_immutable(), myaddr, addr);
+    let checksum = tcp::ipv4_checksum(&tcp_packet.to_immutable(), &packet_info.my_ipaddr, &packet_info.target_ipaddr);
     tcp_packet.set_checksum(checksum);
 }
 
-fn receive_packets(rx: &mut Box<dyn datalink::DataLinkReceiver>, addr: &Ipv4Addr, myaddr: &Ipv4Addr, myport: u16) {
+fn receive_packets(rx: &mut Box<dyn datalink::DataLinkReceiver>, packet_info: &PacketInfo) {
     loop {
         let frame = match rx.next() {
             Ok(frame) => frame,
@@ -76,7 +94,7 @@ fn receive_packets(rx: &mut Box<dyn datalink::DataLinkReceiver>, addr: &Ipv4Addr
         match frame.get_ethertype() {
             ethernet::EtherTypes::Ipv4 => {
                 if let Some(packet) = ipv4::Ipv4Packet::new(frame.payload()) {
-                    if !(&packet.get_source() == addr && &packet.get_destination() == myaddr) {
+                    if !(packet.get_source() == packet_info.target_ipaddr && packet.get_destination() == packet_info.my_ipaddr) {
                         continue;
                     }
                     let tcp = match packet.get_next_level_protocol() {
@@ -90,14 +108,14 @@ fn receive_packets(rx: &mut Box<dyn datalink::DataLinkReceiver>, addr: &Ipv4Addr
                         _ => continue
                     };
 
-                    if tcp.get_destination() == myport {
+                    if tcp.get_destination() == packet_info.my_port {
                         let target_port = tcp.get_source();
                         if tcp.get_flags() == tcp::TcpFlags::SYN | tcp::TcpFlags::ACK {
                             println!("port {} is open", target_port);
                         } else if tcp.get_flags() == tcp::TcpFlags::RST | tcp::TcpFlags::ACK {
                             // println!("port {} is close", target_port);
                         }
-                        if target_port == MAXIMU_PORT_NUM - 1 {
+                        if target_port == MAXIMUM_PORT_NUM - 1 {
                             return;
                         }
                     }
@@ -108,21 +126,22 @@ fn receive_packets(rx: &mut Box<dyn datalink::DataLinkReceiver>, addr: &Ipv4Addr
     }
 }
 
-fn build_my_packet(myaddr: &Ipv4Addr, addr: &Ipv4Addr, source_port: u16, tcp_flag: u16) -> [u8; ETHERNET_SIZE]{
+
+fn build_my_packet(packet_info: &PacketInfo) -> [u8; ETHERNET_SIZE]{
     let mut ethernet_buffer = [0u8; ETHERNET_SIZE];
     
     let mut tcp_header = [0u8; TCP_SIZE];
     let mut tcp_packet = tcp::MutableTcpPacket::new(&mut tcp_header[..]).unwrap();
-    tcp_packet.set_source(source_port);
+    tcp_packet.set_source(packet_info.my_port);
     tcp_packet.set_destination(22222);
     // tcp_packet.set_sequence(12345);
     // tcp_packet.set_acknowledgement(0);
     tcp_packet.set_data_offset(5);
     // tcp_packet.set_reserved(0);
-    tcp_packet.set_flags(tcp_flag);
+    tcp_packet.set_flags(packet_info.tcp_flag);
     // tcp_packet.set_window(0);
     // tcp_packet.set_options(&vec![TcpOption::mss(1460)]);
-    let checksum = tcp::ipv4_checksum(&tcp_packet.to_immutable(), &myaddr, &addr);
+    let checksum = tcp::ipv4_checksum(&tcp_packet.to_immutable(), &packet_info.my_ipaddr, &packet_info.target_ipaddr);
     tcp_packet.set_checksum(checksum);
     // tcp_packet.set_urgent_ptr(0);
 
@@ -138,8 +157,8 @@ fn build_my_packet(myaddr: &Ipv4Addr, addr: &Ipv4Addr, source_port: u16, tcp_fla
     // ipv4_packet.set_fragment_offset(0);
     ipv4_packet.set_ttl(255);
     ipv4_packet.set_next_level_protocol(ip::IpNextHeaderProtocols::Tcp);
-    ipv4_packet.set_source(myaddr.clone());
-    ipv4_packet.set_destination(addr.clone());
+    ipv4_packet.set_source(packet_info.my_ipaddr.clone());
+    ipv4_packet.set_destination(packet_info.target_ipaddr.clone());
 
     // let tcp_mut = tcp_packet.packet_mut();
     let checksum_ip = ipv4::checksum(&ipv4_packet.to_immutable());
@@ -149,9 +168,11 @@ fn build_my_packet(myaddr: &Ipv4Addr, addr: &Ipv4Addr, source_port: u16, tcp_fla
 
     let mut ethernet_packet = ethernet::MutableEthernetPacket::new(&mut ethernet_buffer).unwrap();
 
-    let macAddr: datalink::MacAddr = "88:57:ee:b5:80:53".parse().unwrap();
-    ethernet_packet.set_destination(macAddr);
-    ethernet_packet.set_source(MacAddr::new(0xf4,0x0f,0x24,0x27,0xdb,0x00));
+    // let macAddr: datalink::MacAddr = "88:57:ee:b5:80:53".parse().unwrap();
+    // let macAddr: datalink::MacAddr = "0:26:87:15:a3:e2".parse().unwrap();
+    
+    ethernet_packet.set_destination(packet_info.default_gateway);
+    ethernet_packet.set_source(packet_info.my_macaddr);
     ethernet_packet.set_ethertype(ethernet::EtherTypes::Ipv4);
     ethernet_packet.set_payload(ipv4_packet.packet_mut());
 
