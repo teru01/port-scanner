@@ -49,13 +49,13 @@ fn main() {
 }
 
 fn send_packet(tx: &mut Box<dyn datalink::DataLinkSender>, myaddr: &Ipv4Addr, addr: &Ipv4Addr, my_port: u16) {
-    let (packet, mut _tcp_data) = build_my_packet(myaddr, addr, my_port);
+    let (mut packet, mut _tcp_data) = build_my_packet(myaddr, addr, my_port);
     for i in 50..100 {
-        let mut copied_packet = packet.clone();
-        let mut tcp_packet = tcp::MutableTcpPacket::new(&mut copied_packet[ETHERNET_SIZE-TCP_SIZE..]).unwrap();
+        // let mut packet = packet.clone();
+        let mut tcp_packet = tcp::MutableTcpPacket::new(&mut packet[ETHERNET_SIZE-TCP_SIZE..]).unwrap();
 
         reregister_destination_port(i, &mut tcp_packet, myaddr, addr);
-        tx.send_to(&copied_packet, None);
+        tx.send_to(&packet, None);
     }
 }
 
