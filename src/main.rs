@@ -8,6 +8,7 @@ use std::net::Ipv4Addr;
 use std::{ env, thread, io, time };
 
 extern crate rand;
+extern crate serde;
 
 fn main() {
     let args: Vec<String> = env::args().collect();
@@ -90,7 +91,7 @@ fn main() {
     //     tx.send_to(packet, None);
     // }
     let packet = build_my_packet(&myaddr, &addr, my_port);
-    for i in 1..100 {
+    for i in 50..100 {
         let mut pack = packet.clone();
         let mut tcp = tcp::MutableTcpPacket::new(&mut pack[34..]).unwrap();
         tcp.set_destination(i);
@@ -100,14 +101,6 @@ fn main() {
     }
 
     thread::sleep(time::Duration::from_secs(10));
-    // パケット作って送信する。
-    // 返事をまつ。
-    // 返事がきたらポートの解放状況がわかる
-
-    // 送信したパケットに対する返答という判断をどのように行うか？ => 相手から自分のアドレス、送信元ポートに届くもの。
-    // どのポートに送ったものという判断は？ => タイムアウトをつけて同期にする or 相手の返答ポート
-    // メインスレッド：パケットの送信。
-    // サブスレッド：パケットの受信
 }
 
 // fn receive_packets(rx: datalink::DataLinkReceiver, addr: &Ipv4Addr, myaddr: &Ipv4Addr) -> Result<(), io::Error> {
@@ -157,7 +150,7 @@ fn build_my_packet(myaddr: &Ipv4Addr, addr: &Ipv4Addr, source_port: u16) -> [u8;
     let mut tcp_packet = tcp::MutableTcpPacket::new(&mut tcp_header[..]).unwrap();
     tcp_packet.set_source(source_port);
     tcp_packet.set_destination(22222);
-    tcp_packet.set_sequence(rand::random::<u32>());
+    // tcp_packet.set_sequence(rand::random::<u32>());
     // tcp_packet.set_acknowledgement(0);
     tcp_packet.set_data_offset(6);
     // tcp_packet.set_reserved(0);
@@ -191,7 +184,8 @@ fn build_my_packet(myaddr: &Ipv4Addr, addr: &Ipv4Addr, source_port: u16) -> [u8;
 
     let mut ethernet_packet = ethernet::MutableEthernetPacket::new(&mut ethernet_buffer).unwrap();
 
-    ethernet_packet.set_destination(datalink::MacAddr::new(0x88, 0x57, 0xee, 0xb5, 0x80, 0x53));
+    let macAddr: datalink::MacAddr = "88:57:ee:b5:80:53".parse().unwrap();
+    ethernet_packet.set_destination(macAddr);
     ethernet_packet.set_source(MacAddr::new(0xf4,0x0f,0x24,0x27,0xdb,0x00));
     ethernet_packet.set_ethertype(ethernet::EtherTypes::Ipv4);
     ethernet_packet.set_payload(ipv4_packet.packet_mut());
