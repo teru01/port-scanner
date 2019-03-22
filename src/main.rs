@@ -1,20 +1,34 @@
-// use pnet::packet::tcp::TcpPacket;
+extern crate rand;
+extern crate serde;
+extern crate rayon;
+
+// use std::net::Ipv4Addr;
+use std::{ net, env, thread, time, io, fs };
+
 use pnet::packet::{ tcp, ipv4, ip, ethernet, MutablePacket, Packet};
 use pnet::packet::tcp::TcpOption;
 use pnet::datalink;
 use pnet::datalink::Channel;
 use pnet::datalink::MacAddr;
-use std::net::Ipv4Addr;
-use std::{ env, thread, time };
-
-extern crate rand;
-extern crate serde;
-extern crate rayon;
 
 const TCP_SIZE: usize = 20;
 const IP_SIZE: usize = 20 + TCP_SIZE;
 const ETHERNET_SIZE: usize = 14 + IP_SIZE;
 const MAXIMUM_PORT_NUM: u16 = 1000;
+
+#[macro_use]
+extern crate serde_derive;
+extern crate serde_json;
+
+#[derive(Deserialize)]
+struct PacketInfo {
+    my_macaddr: String,
+    default_gateway: String,
+    my_ipaddr: net::Ipv4Addr,
+    target_ipaddr: net::Ipv4Addr,
+    my_port: u16,
+    tcp_flag: u16
+}
 
 fn main() {
     let args: Vec<String> = env::args().collect();
@@ -22,15 +36,28 @@ fn main() {
         eprintln!("Bad nunber of arguemnts");
         std::process::exit(1);
     }
-
-    let packet_info = PacketInfo {
-        my_macaddr: "f4:0f:24:27:db:00".parse().unwrap(),
-        default_gateway: "88:57:ee:b5:80:53".parse().unwrap(),
-        my_ipaddr: "192.168.11.22".parse().unwrap(),
-        target_ipaddr: args[1].parse().unwrap(),
-        my_port: 33333,
-        tcp_flag: tcp::TcpFlags::SYN
+    let mut packet_info: PacketInfo = match fs::File::open("info.json") {
+        Ok(file) => {
+            let mut reader = io::BufReader::new(file);
+            serde_json::from_reader(reader).unwrap()
+        },
+        Err(e) => {
+            eprintln!("{:?}", e);
+            std::process::exit(1);
+        }
     };
+
+    packet_info.target_ipaddr = args[1].parse().unwrap();
+    packet_info.tcp_flag = tcp::TcpFlags::SYN;
+
+    // let packet_info = PacketInfo {
+    //     my_macaddr: "f4:0f:24:27:db:00".parse().unwrap(),
+    //     default_gateway: "88:57:ee:b5:80:53".parse().unwrap(),
+    //     my_ipaddr: "192.168.11.22".parse().unwrap(),
+    //     target_ipaddr: args[1].parse().unwrap(),
+    //     my_port: 33333,
+    //     tcp_flag: tcp::TcpFlags::SYN
+    // };
 
     let interface_name = env::args().nth(3).unwrap();
 
@@ -54,14 +81,6 @@ fn main() {
 }
 
 
-struct PacketInfo {
-    my_macaddr: datalink::MacAddr,
-    default_gateway: datalink::MacAddr,
-    my_ipaddr: Ipv4Addr,
-    target_ipaddr: Ipv4Addr,
-    my_port: u16,
-    tcp_flag: u16
-}
 
 
 
@@ -171,15 +190,15 @@ fn build_my_packet(packet_info: &PacketInfo) -> [u8; ETHERNET_SIZE]{
     // let macAddr: datalink::MacAddr = "88:57:ee:b5:80:53".parse().unwrap();
     // let macAddr: datalink::MacAddr = "0:26:87:15:a3:e2".parse().unwrap();
     
-    ethernet_packet.set_destination(packet_info.default_gateway);
-    ethernet_packet.set_source(packet_info.my_macaddr);
+    ethernet_packet.set_destination(packet_info.default_gateway.parse().unwrap());
+    ethernet_packet.set_source(packet_info.my_macaddr.parse().unwrap());
     ethernet_packet.set_ethertype(ethernet::EtherTypes::Ipv4);
     ethernet_packet.set_payload(ipv4_packet.packet_mut());
 
     return ethernet_buffer;
 }
 
-fn build_random_packet(my_addr: &Ipv4Addr, destination_ip: &Ipv4Addr) -> Option<[u8; 66]> {
+fn build_random_packet(my_addr: &net::Ipv4Addr, destination_ip: &net::Ipv4Addr) -> Option<[u8; 66]> {
     const ETHERNET_HEADER_LEN: usize = 14;
     const TCP_HEADER_LEN: usize = 32;
     const IPV4_HEADER_LEN: usize = 20;
