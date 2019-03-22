@@ -49,11 +49,9 @@ fn main() {
 }
 
 fn send_packet(tx: &mut Box<dyn datalink::DataLinkSender>, myaddr: &Ipv4Addr, addr: &Ipv4Addr, my_port: u16) {
-    let (mut packet, mut _tcp_data) = build_my_packet(myaddr, addr, my_port);
+    let mut packet = build_my_packet(myaddr, addr, my_port, tcp::TcpFlags::SYN);
     for i in 50..100 {
-        // let mut packet = packet.clone();
         let mut tcp_packet = tcp::MutableTcpPacket::new(&mut packet[ETHERNET_SIZE-TCP_SIZE..]).unwrap();
-
         reregister_destination_port(i, &mut tcp_packet, myaddr, addr);
         tx.send_to(&packet, None);
     }
@@ -106,7 +104,7 @@ fn reregister_destination_port(n: u16, tcp_packet: &mut tcp::MutableTcpPacket, m
 //     }
 // }
 
-fn build_my_packet(myaddr: &Ipv4Addr, addr: &Ipv4Addr, source_port: u16) -> ([u8; ETHERNET_SIZE], [u8; TCP_SIZE]){
+fn build_my_packet(myaddr: &Ipv4Addr, addr: &Ipv4Addr, source_port: u16, tcp_flag: u16) -> [u8; ETHERNET_SIZE]{
     let mut ethernet_buffer = [0u8; ETHERNET_SIZE];
     
     let mut tcp_header = [0u8; TCP_SIZE];
@@ -117,7 +115,7 @@ fn build_my_packet(myaddr: &Ipv4Addr, addr: &Ipv4Addr, source_port: u16) -> ([u8
     // tcp_packet.set_acknowledgement(0);
     tcp_packet.set_data_offset(5);
     // tcp_packet.set_reserved(0);
-    tcp_packet.set_flags(tcp::TcpFlags::SYN); //SYNパケット
+    tcp_packet.set_flags(tcp_flag);
     // tcp_packet.set_window(0);
     // tcp_packet.set_options(&vec![TcpOption::mss(1460)]);
     let checksum = tcp::ipv4_checksum(&tcp_packet.to_immutable(), &myaddr, &addr);
@@ -153,7 +151,7 @@ fn build_my_packet(myaddr: &Ipv4Addr, addr: &Ipv4Addr, source_port: u16) -> ([u8
     ethernet_packet.set_ethertype(ethernet::EtherTypes::Ipv4);
     ethernet_packet.set_payload(ipv4_packet.packet_mut());
 
-    return (ethernet_buffer, tcp_header);
+    return ethernet_buffer;
 }
 
 fn build_random_packet(my_addr: &Ipv4Addr, destination_ip: &Ipv4Addr) -> Option<[u8; 66]> {
