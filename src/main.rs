@@ -107,6 +107,7 @@ fn reregister_destination_port(target: u16, tcp_header: &mut tcp::MutableTcpPack
 
 // パケットを受信してスキャン結果を出力する。
 fn receive_packets(rx: &mut Box<dyn datalink::DataLinkReceiver>, packet_info: &PacketInfo) {
+    let mut reply_ports = Vec::new();
     loop {
         let frame = match rx.next() {
             Ok(frame) => frame,
@@ -141,22 +142,24 @@ fn receive_packets(rx: &mut Box<dyn datalink::DataLinkReceiver>, packet_info: &P
                                     println!("port {} is open", target_port);
                                 }
                             },
-                            ScanType::FinScan => {
-
+                            ScanType::FinScan | ScanType::XmasScan | ScanType::NullScan => {
+                                reply_ports.push(target_port);
                             },
-                            ScanType::XmasScan => {
-
-                            },
-                            ScanType::NullScan => {
-
-                            }
-                        }
-                        if tcp.get_flags() == tcp::TcpFlags::SYN | tcp::TcpFlags::ACK {
-                            println!("port {} is open", target_port);
-                        } else if tcp.get_flags() == tcp::TcpFlags::RST | tcp::TcpFlags::ACK {
-                            // println!("port {} is close", target_port);
                         }
                         if target_port == MAXIMUM_PORT_NUM - 1 {
+                            match packet_info.scan_type {
+                                ScanType::FinScan | ScanType::XmasScan | ScanType::NullScan => {
+                                    for i in 1..MAXIMUM_PORT_NUM {
+                                        match reply_ports.iter().find(|&&x| x == i) {
+                                            None => {
+                                                println!("port {} is open", i);
+                                            },
+                                            _ => {}
+                                        }
+                                    }
+                                },
+                                _ => {}
+                            }
                             return;
                         }
                     }
