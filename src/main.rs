@@ -5,12 +5,11 @@ extern crate rayon;
 use std::{ net, env, thread, time, fs, collections };
 use pnet::packet::{ tcp, ipv4, ip, ethernet, MutablePacket, Packet};
 use pnet::datalink;
-use pnet::datalink::Channel;
 
 const TCP_SIZE: usize = 20;
 const IP_SIZE: usize = 20 + TCP_SIZE;
 const ETHERNET_SIZE: usize = 14 + IP_SIZE;
-const MAXIMUM_PORT_NUM: u16 = 1000;
+const MAXIMUM_PORT_NUM: u16 = 1023;
 
 struct PacketInfo {
     my_macaddr: String,
@@ -75,7 +74,7 @@ fn main() {
         .expect("Failed to get interface");
 
     let (mut tx, mut rx) = match datalink::channel(&interface, Default::default()) {
-        Ok(Channel::Ethernet(tx, rx)) => (tx, rx),
+        Ok(datalink::Channel::Ethernet(tx, rx)) => (tx, rx),
         Ok(_) => panic!("Unhandled channel type"),
         Err(e) => {
             panic!("Failed to create datalink channel {}", e)
@@ -90,7 +89,7 @@ fn main() {
 // 指定のレンジにパケットを送信
 fn send_packet(tx: &mut Box<dyn datalink::DataLinkSender>, packet_info: &PacketInfo) {
     let mut packet = build_packet(packet_info);
-    for i in 1..MAXIMUM_PORT_NUM {
+    for i in 1..MAXIMUM_PORT_NUM+1 {
         let mut tcp_header = tcp::MutableTcpPacket::new(&mut packet[ETHERNET_SIZE-TCP_SIZE..]).unwrap();
         reregister_destination_port(i, &mut tcp_header, packet_info);
         thread::sleep(time::Duration::from_millis(5));
@@ -146,10 +145,10 @@ fn receive_packets(rx: &mut Box<dyn datalink::DataLinkReceiver>, packet_info: &P
                                 reply_ports.push(target_port);
                             },
                         }
-                        if target_port == MAXIMUM_PORT_NUM - 1 {
+                        if target_port == MAXIMUM_PORT_NUM {
                             match packet_info.scan_type {
                                 ScanType::FinScan | ScanType::XmasScan | ScanType::NullScan => {
-                                    for i in 1..MAXIMUM_PORT_NUM {
+                                    for i in 1..MAXIMUM_PORT_NUM+1 {
                                         match reply_ports.iter().find(|&&x| x == i) {
                                             None => {
                                                 println!("port {} is open", i);
