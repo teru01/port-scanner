@@ -1,5 +1,3 @@
-extern crate rand;
-extern crate serde;
 extern crate rayon;
 
 use std::{ net, env, thread, time, fs, collections };
