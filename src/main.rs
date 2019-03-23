@@ -2,8 +2,7 @@ extern crate rand;
 extern crate serde;
 extern crate rayon;
 
-use std::{ net, env, thread, time, io, fs, collections };
-use std::io::BufRead;
+use std::{ net, env, thread, time, fs, collections };
 use pnet::packet::{ tcp, ipv4, ip, ethernet, MutablePacket, Packet};
 use pnet::datalink;
 use pnet::datalink::Channel;
@@ -33,47 +32,40 @@ enum ScanType {
 
 fn main() {
     let args: Vec<String> = env::args().collect();
-    if args.len() != 4 {
+    if args.len() != 3 {
         eprintln!("Bad nunber of arguemnts");
         std::process::exit(1);
     }
-    let mut packet_info: PacketInfo = match fs::File::open(".env") {
-        Ok(file) => {
-            let mut map = collections::HashMap::new();
-            // ここで配列なりに展開しないとダメ？lineがループ終わりにドロップされるから
-            for line in io::BufReader::new(file).lines() {
-                let elm: Vec<_> = line.unwrap().split('=').map(|s| s.trim()).collect();
+
+    let mut packet_info: PacketInfo = {
+        let contents = fs::read_to_string(".env").expect("Failed to read env file");
+        let lines: Vec<_> = contents.split('\n').collect();
+        let mut map = collections::HashMap::new();
+        for line in lines {
+            let elm: Vec<_> = line.split('=').map(|s| s.trim()).collect();
+            if elm.len() == 2 {
                 map.insert(elm[0], elm[1]);
             }
-            PacketInfo {
-                my_macaddr:      map.get("MY_MACADDR")     .expect("missing my_macaddr")     .to_string(),
-                default_gateway: map.get("DEFAULT_GATEWAY").expect("missing default gateway").to_string(),
-                my_ipaddr:       map.get("MY_IPADDR")      .expect("missing my_ipaddr")      .parse().expect("invalid ipaddr"),
-                target_ipaddr:   map.get("TARGET_IPADDR")  .expect("missing target_ipaddr")  .parse().expect("invalid ipaddr"),
-                my_port:         map.get("MY_PORT")        .expect("missing my_port")        .parse().expect("invalid port number"),
-                iface:           map.get("IFACE")          .expect("missing interface name") .to_string(),
-                scan_type:       ScanType::SynScan
-            }
-        },
-        Err(e) => {
-            eprintln!("{:?}", e);
-            std::process::exit(1);
+        }
+        PacketInfo {
+            my_macaddr:      map.get("MY_MACADDR")     .expect("missing my_macaddr")     .to_string(),
+            default_gateway: map.get("DEFAULT_GATEWAY").expect("missing default gateway").to_string(),
+            my_ipaddr:       map.get("MY_IPADDR")      .expect("missing my_ipaddr")      .parse().expect("invalid ipaddr"),
+            target_ipaddr:   map.get("TARGET_IPADDR")  .expect("missing target_ipaddr")  .parse().expect("invalid ipaddr"),
+            my_port:         map.get("MY_PORT")        .expect("missing my_port")        .parse().expect("invalid port number"),
+            iface:           map.get("IFACE")          .expect("missing interface name") .to_string(),
+            scan_type:       ScanType::SynScan
         }
     };
 
-    packet_info.target_ipaddr = args[1].parse().unwrap();
-
-    if &args[2] == "sS" {
-        packet_info.scan_type = ScanType::SynScan
-    } else if &args[2] == "sF" {
-        packet_info.scan_type = ScanType::FinScan
-    } else if &args[2] == "sX" {
-        packet_info.scan_type = ScanType::XmasScan
-    } else if &args[2] == "sN" {
-        packet_info.scan_type = ScanType::NullScan
-    } else {
-        panic!("Undefined scan method");
-    }
+    packet_info.target_ipaddr = args[1].parse().expect("invalid target ipaddr");
+    packet_info.scan_type = match args[2].as_str() {
+        "sS" => ScanType::SynScan,
+        "sF" => ScanType::FinScan,
+        "sX" => ScanType::XmasScan,
+        "sN" => ScanType::NullScan,
+        _    => panic!("Undefined scan method")
+    };
 
     let interfaces = datalink::interfaces();
     let interface = interfaces
@@ -145,7 +137,9 @@ fn receive_packets(rx: &mut Box<dyn datalink::DataLinkReceiver>, packet_info: &P
                         let target_port = tcp.get_source();
                         match packet_info.scan_type {
                             ScanType::SynScan => {
-
+                                if tcp.get_flags() == tcp::TcpFlags::SYN | tcp::TcpFlags::ACK {
+                                    println!("port {} is open", target_port);
+                                }
                             },
                             ScanType::FinScan => {
 
@@ -168,7 +162,7 @@ fn receive_packets(rx: &mut Box<dyn datalink::DataLinkReceiver>, packet_info: &P
                     }
                 }
             },
-            _ => { continue; }
+            _ => continue
         }
     }
 }
