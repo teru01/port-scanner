@@ -48,7 +48,7 @@ fn main() {
             my_macaddr:      map.get("MY_MACADDR")     .expect("missing my_macaddr")     .to_string(),
             default_gateway: map.get("DEFAULT_GATEWAY").expect("missing default gateway").to_string(),
             my_ipaddr:       map.get("MY_IPADDR")      .expect("missing my_ipaddr")      .parse().expect("invalid ipaddr"),
-            target_ipaddr:   map.get("TARGET_IPADDR")  .expect("missing target_ipaddr")  .parse().expect("invalid ipaddr"),
+            target_ipaddr:   "0.0.0.0".parse().expect("invalid ipaddr"),
             my_port:         map.get("MY_PORT")        .expect("missing my_port")        .parse().expect("invalid port number"),
             iface:           map.get("IFACE")          .expect("missing interface name") .to_string(),
             scan_type:       ScanType::SynScan
@@ -184,7 +184,7 @@ fn build_packet(packet_info: &PacketInfo) -> [u8; ETHERNET_SIZE]{
     let mut ip_header = ipv4::MutableIpv4Packet::new(&mut ip_buffer[..]).unwrap();
     ip_header.set_version(4);
     ip_header.set_header_length(5);
-    ip_header.set_total_length(IP_SIZE as u16); //?
+    ip_header.set_total_length(IP_SIZE as u16);
     ip_header.set_ttl(255);
     ip_header.set_next_level_protocol(ip::IpNextHeaderProtocols::Tcp);
     ip_header.set_source(packet_info.my_ipaddr.clone());
