@@ -2,8 +2,8 @@ extern crate rand;
 extern crate serde;
 extern crate rayon;
 
-use std::{ net, env, thread, time, io, fs };
-
+use std::{ net, env, thread, time, io, fs, collections };
+use std::io::BufRead;
 use pnet::packet::{ tcp, ipv4, ip, ethernet, MutablePacket, Packet};
 use pnet::datalink;
 use pnet::datalink::Channel;
@@ -13,27 +13,22 @@ const IP_SIZE: usize = 20 + TCP_SIZE;
 const ETHERNET_SIZE: usize = 14 + IP_SIZE;
 const MAXIMUM_PORT_NUM: u16 = 1000;
 
-#[macro_use]
-extern crate serde_derive;
-extern crate serde_json;
-
-#[derive(Deserialize)]
 struct PacketInfo {
     my_macaddr: String,
     default_gateway: String,
     my_ipaddr: net::Ipv4Addr,
     target_ipaddr: net::Ipv4Addr,
     my_port: u16,
-    scan_type: isize,
-    iface: String
+    iface: String,
+    scan_type: ScanType,
 }
 
-#[derive(Deserialize, Copy, Clone)]
+#[derive(Copy, Clone)]
 enum ScanType {
-    SYN_SCAN = tcp::TcpFlags::SYN as isize,
-    FIN_SCAN = tcp::TcpFlags::FIN as isize,
-    XMAS_SCAN = tcp::TcpFlags::FIN as isize | tcp::TcpFlags::URG as isize | tcp::TcpFlags::PSH as isize,
-    NULL_SCAN = 0
+    SynScan = tcp::TcpFlags::SYN as isize,
+    FinScan = tcp::TcpFlags::FIN as isize,
+    XmasScan = tcp::TcpFlags::FIN as isize | tcp::TcpFlags::URG as isize | tcp::TcpFlags::PSH as isize,
+    NullScan = 0
 }
 
 fn main() {
@@ -42,10 +37,23 @@ fn main() {
         eprintln!("Bad nunber of arguemnts");
         std::process::exit(1);
     }
-    let mut packet_info: PacketInfo = match fs::File::open("info.json") {
+    let mut packet_info: PacketInfo = match fs::File::open(".env") {
         Ok(file) => {
-            let reader = io::BufReader::new(file);
-            serde_json::from_reader(reader).expect("Failed to read from json")
+            let mut map = collections::HashMap::new();
+            // ここで配列なりに展開しないとダメ？lineがループ終わりにドロップされるから
+            for line in io::BufReader::new(file).lines() {
+                let elm: Vec<_> = line.unwrap().split('=').map(|s| s.trim()).collect();
+                map.insert(elm[0], elm[1]);
+            }
+            PacketInfo {
+                my_macaddr:      map.get("MY_MACADDR")     .expect("missing my_macaddr")     .to_string(),
+                default_gateway: map.get("DEFAULT_GATEWAY").expect("missing default gateway").to_string(),
+                my_ipaddr:       map.get("MY_IPADDR")      .expect("missing my_ipaddr")      .parse().expect("invalid ipaddr"),
+                target_ipaddr:   map.get("TARGET_IPADDR")  .expect("missing target_ipaddr")  .parse().expect("invalid ipaddr"),
+                my_port:         map.get("MY_PORT")        .expect("missing my_port")        .parse().expect("invalid port number"),
+                iface:           map.get("IFACE")          .expect("missing interface name") .to_string(),
+                scan_type:       ScanType::SynScan
+            }
         },
         Err(e) => {
             eprintln!("{:?}", e);
@@ -56,13 +64,13 @@ fn main() {
     packet_info.target_ipaddr = args[1].parse().unwrap();
 
     if &args[2] == "sS" {
-        packet_info.scan_type = ScanType::SYN_SCAN
+        packet_info.scan_type = ScanType::SynScan
     } else if &args[2] == "sF" {
-        packet_info.scan_type = ScanType::FIN_SCAN
+        packet_info.scan_type = ScanType::FinScan
     } else if &args[2] == "sX" {
-        packet_info.scan_type = ScanType::XMAS_SCAN
+        packet_info.scan_type = ScanType::XmasScan
     } else if &args[2] == "sN" {
-        packet_info.scan_type = ScanType::NULL_SCAN
+        packet_info.scan_type = ScanType::NullScan
     } else {
         panic!("Undefined scan method");
     }
@@ -136,16 +144,16 @@ fn receive_packets(rx: &mut Box<dyn datalink::DataLinkReceiver>, packet_info: &P
                     if tcp.get_destination() == packet_info.my_port {
                         let target_port = tcp.get_source();
                         match packet_info.scan_type {
-                            ScanType::SYN_SCAN => {
+                            ScanType::SynScan => {
 
                             },
-                            ScanType::FIN_SCAN => {
+                            ScanType::FinScan => {
 
                             },
-                            ScanType::XMAS_SCAN => {
+                            ScanType::XmasScan => {
 
                             },
-                            ScanType::NULL_SCAN => {
+                            ScanType::NullScan => {
 
                             }
                         }
@@ -194,8 +202,8 @@ fn build_packet(packet_info: &PacketInfo) -> [u8; ETHERNET_SIZE]{
     // Ethernetヘッダの作成
     let mut ethernet_buffer = [0u8; ETHERNET_SIZE];
     let mut ethernet_header = ethernet::MutableEthernetPacket::new(&mut ethernet_buffer).unwrap();
-    ethernet_header.set_destination(packet_info.default_gateway.parse().unwrap());
-    ethernet_header.set_source(packet_info.my_macaddr.parse().unwrap());
+    ethernet_header.set_destination(packet_info.default_gateway.parse().expect("invalid default gateway"));
+    ethernet_header.set_source(packet_info.my_macaddr.parse().expect("invalid my_macaddr"));
     ethernet_header.set_ethertype(ethernet::EtherTypes::Ipv4);
     ethernet_header.set_payload(ip_header.packet_mut());
 
