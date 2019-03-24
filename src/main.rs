@@ -80,7 +80,7 @@ fn main() {
     //     }
     // };
 
-    let (mut ts, mut tr) = transport::transport_channel(1024, transport::TransportChannelType::Layer4(TransportProtocol::Ipv4(ip::IpNextHeaderProtocols::Tcp))).unwrap();
+    let (mut ts, mut tr) = transport::transport_channel(1024, transport::TransportChannelType::Layer3(ip::IpNextHeaderProtocols::Tcp)).unwrap();
 
     rayon::join(|| send_packet(&mut ts, &packet_info),
                 || receive_packets(&mut tr, &packet_info)
@@ -95,7 +95,9 @@ fn send_packet(ts: &mut transport::TransportSender, packet_info: &PacketInfo) {
         let mut tcp_header = tcp::MutableTcpPacket::new(&mut packet[ETHERNET_SIZE-TCP_SIZE..]).unwrap();
         reregister_destination_port(i, &mut tcp_header, packet_info);
         thread::sleep(time::Duration::from_millis(5));
-        ts.send_to(tcp_header, "192.168.11.1".parse().unwrap()).expect("failed to send");
+
+        let ip_header = ipv4::Ipv4Packet::new(&packet[ETHERNET_SIZE-IP_SIZE..]).unwrap();
+        ts.send_to(ip_header, "192.168.11.1".parse().unwrap()).expect("failed to send");
     }
 }
 
@@ -109,41 +111,51 @@ fn reregister_destination_port(target: u16, tcp_header: &mut tcp::MutableTcpPack
 // パケットを受信してスキャン結果を出力する。
 fn receive_packets(tr: &mut transport::TransportReceiver, packet_info: &PacketInfo) {
     let mut reply_ports = Vec::new();
-    let mut packet_iter = transport::tcp_packet_iter(tr);
+    let mut ip_packet_iter = transport::ipv4_packet_iter(tr);
     loop {
         println!("befor got a packet");
-        if let Ok((tcp_packet, _)) = packet_iter.next() {
-            println!("got a packet");
-            if tcp_packet.get_destination() == packet_info.my_port {
-                let target_port = tcp_packet.get_source();
-                match packet_info.scan_type {
-                    ScanType::SynScan => {
-                        if tcp_packet.get_flags() == tcp::TcpFlags::SYN | tcp::TcpFlags::ACK {
-                            println!("port {} is open", target_port);
-                        }
-                    },
-                    ScanType::FinScan | ScanType::XmasScan | ScanType::NullScan => {
-                        reply_ports.push(target_port);
-                    },
-                }
-                if target_port == MAXIMUM_PORT_NUM {
+        let ip_packet = match ip_packet_iter.next() {
+            Ok((ip_packet, _)) => {
+                println!("got a packet");
+                ip_packet
+            },
+            Err(_) => {
+                println!("got a err");
+                continue;
+            }
+        };
+
+            if let Some(tcp_packet) = tcp::TcpPacket::new(ip_packet.payload()) {
+                if tcp_packet.get_destination() == packet_info.my_port {
+                    let target_port = tcp_packet.get_source();
                     match packet_info.scan_type {
-                        ScanType::FinScan | ScanType::XmasScan | ScanType::NullScan => {
-                            for i in 1..MAXIMUM_PORT_NUM+1 {
-                                match reply_ports.iter().find(|&&x| x == i) {
-                                    None => {
-                                        println!("port {} is open", i);
-                                    },
-                                    _ => {}
-                                }
+                        ScanType::SynScan => {
+                            if tcp_packet.get_flags() == tcp::TcpFlags::SYN | tcp::TcpFlags::ACK {
+                                println!("port {} is open", target_port);
                             }
                         },
-                        _ => {}
+                        ScanType::FinScan | ScanType::XmasScan | ScanType::NullScan => {
+                            reply_ports.push(target_port);
+                        },
                     }
-                    return;
+                    if target_port == MAXIMUM_PORT_NUM {
+                        match packet_info.scan_type {
+                            ScanType::FinScan | ScanType::XmasScan | ScanType::NullScan => {
+                                for i in 1..MAXIMUM_PORT_NUM+1 {
+                                    match reply_ports.iter().find(|&&x| x == i) {
+                                        None => {
+                                            println!("port {} is open", i);
+                                        },
+                                        _ => {}
+                                    }
+                                }
+                            },
+                            _ => {}
+                        }
+                        return;
+                    }
                 }
             }
-        }
     }
 }
 
