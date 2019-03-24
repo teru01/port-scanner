@@ -1,22 +1,16 @@
 extern crate rayon;
 
 use std::{ net, env, thread, time, fs, collections };
-use pnet::packet::{ tcp, ipv4, ip, ethernet, MutablePacket, Packet};
-use pnet::datalink;
+use pnet::packet::{ tcp, ip };
 use pnet::transport::{self, TransportProtocol};
 
 const TCP_SIZE: usize = 20;
-const IP_SIZE: usize = 20 + TCP_SIZE;
-const ETHERNET_SIZE: usize = 14 + IP_SIZE;
 const MAXIMUM_PORT_NUM: u16 = 1023;
 
 struct PacketInfo {
-    my_macaddr: String,
-    default_gateway: String,
     my_ipaddr: net::Ipv4Addr,
     target_ipaddr: net::Ipv4Addr,
     my_port: u16,
-    iface: String,
     scan_type: ScanType,
 }
 
@@ -46,12 +40,9 @@ fn main() {
             }
         }
         PacketInfo {
-            my_macaddr:      map.get("MY_MACADDR")     .expect("missing my_macaddr")     .to_string(),
-            default_gateway: map.get("DEFAULT_GATEWAY").expect("missing default gateway").to_string(),
-            my_ipaddr:       map.get("MY_IPADDR")      .expect("missing my_ipaddr")      .parse().expect("invalid ipaddr"),
-            target_ipaddr:   "0.0.0.0".parse().expect("invalid ipaddr"),
-            my_port:         map.get("MY_PORT")        .expect("missing my_port")        .parse().expect("invalid port number"),
-            iface:           map.get("IFACE")          .expect("missing interface name") .to_string(),
+            my_ipaddr:       map.get("MY_IPADDR").expect("missing my_ipaddr").parse().expect("invalid ipaddr"),
+            target_ipaddr:   "0.0.0.0".parse().unwrap(),
+            my_port:         map.get("MY_PORT").expect("missing my_port").parse().expect("invalid port number"),
             scan_type:       ScanType::SynScan
         }
     };
@@ -65,22 +56,7 @@ fn main() {
         _    => panic!("Undefined scan method")
     };
 
-    // let interfaces = datalink::interfaces();
-    // let interface = interfaces
-    //     .into_iter()
-    //     .filter(|iface| iface.name == packet_info.iface)
-    //     .next()
-    //     .expect("Failed to get interface");
-
-    // let (mut tx, mut rx) = match datalink::channel(&interface, Default::default()) {
-    //     Ok(datalink::Channel::Ethernet(tx, rx)) => (tx, rx),
-    //     Ok(_) => panic!("Unhandled channel type"),
-    //     Err(e) => {
-    //         panic!("Failed to create datalink channel {}", e)
-    //     }
-    // };
-
-    let (mut ts, mut tr) = transport::transport_channel(1024, transport::TransportChannelType::Layer3(ip::IpNextHeaderProtocols::Tcp)).unwrap();
+    let (mut ts, mut tr) = transport::transport_channel(1024, transport::TransportChannelType::Layer4(TransportProtocol::Ipv4(ip::IpNextHeaderProtocols::Tcp))).unwrap();
 
     rayon::join(|| send_packet(&mut ts, &packet_info),
                 || receive_packets(&mut tr, &packet_info)
@@ -91,13 +67,10 @@ fn main() {
 fn send_packet(ts: &mut transport::TransportSender, packet_info: &PacketInfo) {
     let mut packet = build_packet(packet_info);
     for i in 1..MAXIMUM_PORT_NUM+1 {
-        let mut packet = packet.clone();
-        let mut tcp_header = tcp::MutableTcpPacket::new(&mut packet[ETHERNET_SIZE-TCP_SIZE..]).unwrap();
+        let mut tcp_header = tcp::MutableTcpPacket::new(&mut packet).unwrap();
         reregister_destination_port(i, &mut tcp_header, packet_info);
         thread::sleep(time::Duration::from_millis(5));
-
-        let ip_header = ipv4::Ipv4Packet::new(&packet[ETHERNET_SIZE-IP_SIZE..]).unwrap();
-        ts.send_to(ip_header, "192.168.11.1".parse().unwrap()).expect("failed to send");
+        ts.send_to(tcp_header, net::IpAddr::V4(packet_info.target_ipaddr)).expect("failed to send");
     }
 }
 
@@ -113,19 +86,20 @@ fn receive_packets(tr: &mut transport::TransportReceiver, packet_info: &PacketIn
     let mut reply_ports = Vec::new();
     let mut ip_packet_iter = transport::ipv4_packet_iter(tr);
     loop {
-        let ip_packet = match ip_packet_iter.next() {
-            Ok((ip_packet, _)) => {
-                ip_packet
-            },
-            Err(_) => {
-                println!("got a err");
-                continue;
-            }
-        };
-
-            if let Some(tcp_packet) = tcp::TcpPacket::new(ip_packet.payload()) {
-                if tcp_packet.get_destination() == packet_info.my_port {
-                    let target_port = tcp_packet.get_source();
+        if let Ok((tcp_packet, _)) = packet_iter.next() {
+            if tcp_packet.get_destination() == packet_info.my_port {
+                let target_port = tcp_packet.get_source();
+                match packet_info.scan_type {
+                    ScanType::SynScan => {
+                        if tcp_packet.get_flags() == tcp::TcpFlags::SYN | tcp::TcpFlags::ACK {
+                            println!("port {} is open", target_port);
+                        }
+                    },
+                    ScanType::FinScan | ScanType::XmasScan | ScanType::NullScan => {
+                        reply_ports.push(target_port);
+                    },
+                }
+                if target_port == MAXIMUM_PORT_NUM {
                     match packet_info.scan_type {
                         ScanType::SynScan => {
                             if tcp_packet.get_flags() == tcp::TcpFlags::SYN | tcp::TcpFlags::ACK {
@@ -158,7 +132,7 @@ fn receive_packets(tr: &mut transport::TransportReceiver, packet_info: &PacketIn
 }
 
 // パケットを生成する。
-fn build_packet(packet_info: &PacketInfo) -> [u8; ETHERNET_SIZE]{
+fn build_packet(packet_info: &PacketInfo) -> [u8; TCP_SIZE]{
     // TCPヘッダの作成
     let mut tcp_buffer = [0u8; TCP_SIZE];
     let mut tcp_header = tcp::MutableTcpPacket::new(&mut tcp_buffer[..]).unwrap();
@@ -169,27 +143,5 @@ fn build_packet(packet_info: &PacketInfo) -> [u8; ETHERNET_SIZE]{
     let checksum = tcp::ipv4_checksum(&tcp_header.to_immutable(), &packet_info.my_ipaddr, &packet_info.target_ipaddr);
     tcp_header.set_checksum(checksum);
 
-    // IPヘッダの作成
-    let mut ip_buffer = [0u8; IP_SIZE];
-    let mut ip_header = ipv4::MutableIpv4Packet::new(&mut ip_buffer[..]).unwrap();
-    ip_header.set_version(4);
-    ip_header.set_header_length(5);
-    ip_header.set_total_length(IP_SIZE as u16);
-    ip_header.set_ttl(255);
-    ip_header.set_next_level_protocol(ip::IpNextHeaderProtocols::Tcp);
-    ip_header.set_source(packet_info.my_ipaddr.clone());
-    ip_header.set_destination(packet_info.target_ipaddr.clone());
-    let checksum_ip = ipv4::checksum(&ip_header.to_immutable());
-    ip_header.set_checksum(checksum_ip);
-    ip_header.set_payload(tcp_header.packet_mut());
-
-    // Ethernetヘッダの作成
-    let mut ethernet_buffer = [0u8; ETHERNET_SIZE];
-    let mut ethernet_header = ethernet::MutableEthernetPacket::new(&mut ethernet_buffer).unwrap();
-    ethernet_header.set_destination(packet_info.default_gateway.parse().expect("invalid default gateway"));
-    ethernet_header.set_source(packet_info.my_macaddr.parse().expect("invalid my_macaddr"));
-    ethernet_header.set_ethertype(ethernet::EtherTypes::Ipv4);
-    ethernet_header.set_payload(ip_header.packet_mut());
-
-    return ethernet_buffer;
+    return tcp_buffer;
 }
