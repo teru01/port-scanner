@@ -3,7 +3,7 @@ extern crate rayon;
 use std::{ net, env, thread, time, fs, collections };
 use pnet::packet::{ tcp, ipv4, ip, ethernet, MutablePacket, Packet};
 use pnet::datalink;
-use pnet::transport;
+use pnet::transport::{self, TransportProtocol};
 
 const TCP_SIZE: usize = 20;
 const IP_SIZE: usize = 20 + TCP_SIZE;
@@ -80,7 +80,7 @@ fn main() {
     //     }
     // };
 
-    let (mut ts, mut tr) = transport::transport_channel(20, transport::TransportChannelType::Layer3(ip::IpNextHeaderProtocols::Tcp)).unwrap();
+    let (mut ts, mut tr) = transport::transport_channel(1024, transport::TransportChannelType::Layer4(TransportProtocol::Ipv4(ip::IpNextHeaderProtocols::Tcp))).unwrap();
 
     rayon::join(|| send_packet(&mut ts, &packet_info),
                 || receive_packets(&mut tr, &packet_info)
@@ -109,8 +109,11 @@ fn reregister_destination_port(target: u16, tcp_header: &mut tcp::MutableTcpPack
 // パケットを受信してスキャン結果を出力する。
 fn receive_packets(tr: &mut transport::TransportReceiver, packet_info: &PacketInfo) {
     let mut reply_ports = Vec::new();
+    let mut packet_iter = transport::tcp_packet_iter(tr);
     loop {
-        if let Some(tcp_packet) = tcp::TcpPacket::new(&tr.buffer) {
+        println!("befor got a packet");
+        if let Ok((tcp_packet, _)) = packet_iter.next() {
+            println!("got a packet");
             if tcp_packet.get_destination() == packet_info.my_port {
                 let target_port = tcp_packet.get_source();
                 match packet_info.scan_type {
@@ -141,7 +144,6 @@ fn receive_packets(tr: &mut transport::TransportReceiver, packet_info: &PacketIn
                 }
             }
         }
-        tr.buffer = Vec::new();
     }
 }
 
