@@ -113,10 +113,8 @@ fn receive_packets(tr: &mut transport::TransportReceiver, packet_info: &PacketIn
     let mut reply_ports = Vec::new();
     let mut ip_packet_iter = transport::ipv4_packet_iter(tr);
     loop {
-        println!("befor got a packet");
         let ip_packet = match ip_packet_iter.next() {
             Ok((ip_packet, _)) => {
-                println!("got a packet");
                 ip_packet
             },
             Err(_) => {
