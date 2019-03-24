@@ -3,6 +3,7 @@ extern crate rayon;
 use std::{ net, env, thread, time, fs, collections };
 use pnet::packet::{ tcp, ipv4, ip, ethernet, MutablePacket, Packet};
 use pnet::datalink;
+use pnet::transport;
 
 const TCP_SIZE: usize = 20;
 const IP_SIZE: usize = 20 + TCP_SIZE;
@@ -64,34 +65,37 @@ fn main() {
         _    => panic!("Undefined scan method")
     };
 
-    let interfaces = datalink::interfaces();
-    let interface = interfaces
-        .into_iter()
-        .filter(|iface| iface.name == packet_info.iface)
-        .next()
-        .expect("Failed to get interface");
+    // let interfaces = datalink::interfaces();
+    // let interface = interfaces
+    //     .into_iter()
+    //     .filter(|iface| iface.name == packet_info.iface)
+    //     .next()
+    //     .expect("Failed to get interface");
 
-    let (mut tx, mut rx) = match datalink::channel(&interface, Default::default()) {
-        Ok(datalink::Channel::Ethernet(tx, rx)) => (tx, rx),
-        Ok(_) => panic!("Unhandled channel type"),
-        Err(e) => {
-            panic!("Failed to create datalink channel {}", e)
-        }
-    };
+    // let (mut tx, mut rx) = match datalink::channel(&interface, Default::default()) {
+    //     Ok(datalink::Channel::Ethernet(tx, rx)) => (tx, rx),
+    //     Ok(_) => panic!("Unhandled channel type"),
+    //     Err(e) => {
+    //         panic!("Failed to create datalink channel {}", e)
+    //     }
+    // };
 
-    rayon::join(|| send_packet(&mut tx, &packet_info),
-                || receive_packets(&mut rx, &packet_info)
+    let (mut ts, mut tr) = transport::transport_channel(20, transport::TransportChannelType::Layer3(ip::IpNextHeaderProtocols::Tcp)).unwrap();
+
+    rayon::join(|| send_packet(&mut ts, &packet_info),
+                || receive_packets(&mut tr, &packet_info)
     );
 }
 
 // 指定のレンジにパケットを送信
-fn send_packet(tx: &mut Box<dyn datalink::DataLinkSender>, packet_info: &PacketInfo) {
+fn send_packet(ts: &mut transport::TransportSender, packet_info: &PacketInfo) {
     let mut packet = build_packet(packet_info);
     for i in 1..MAXIMUM_PORT_NUM+1 {
+        let mut packet = packet.clone();
         let mut tcp_header = tcp::MutableTcpPacket::new(&mut packet[ETHERNET_SIZE-TCP_SIZE..]).unwrap();
         reregister_destination_port(i, &mut tcp_header, packet_info);
         thread::sleep(time::Duration::from_millis(5));
-        tx.send_to(&packet, None);
+        ts.send_to(tcp_header, "192.168.11.1".parse().unwrap()).expect("failed to send");
     }
 }
 
@@ -103,67 +107,41 @@ fn reregister_destination_port(target: u16, tcp_header: &mut tcp::MutableTcpPack
 }
 
 // パケットを受信してスキャン結果を出力する。
-fn receive_packets(rx: &mut Box<dyn datalink::DataLinkReceiver>, packet_info: &PacketInfo) {
+fn receive_packets(tr: &mut transport::TransportReceiver, packet_info: &PacketInfo) {
     let mut reply_ports = Vec::new();
     loop {
-        let frame = match rx.next() {
-            Ok(frame) => frame,
-            Err(_) => {
-                continue
-            }
-        };
-        let frame = ethernet::EthernetPacket::new(frame).unwrap();
-        match frame.get_ethertype() {
-            ethernet::EtherTypes::Ipv4 => {
-                if let Some(packet) = ipv4::Ipv4Packet::new(frame.payload()) {
-                    // ターゲットから自ホスト宛て以外のものは無視
-                    if !(packet.get_source() == packet_info.target_ipaddr && packet.get_destination() == packet_info.my_ipaddr) {
-                        continue;
-                    }
-                    let tcp = match packet.get_next_level_protocol() {
-                        ip::IpNextHeaderProtocols::Tcp => {
-                            if let Some(tcp) = tcp::TcpPacket::new(packet.payload()) {
-                                tcp
-                            } else {
-                                continue
-                            }
+        if let Some(tcp_packet) = tcp::TcpPacket::new(&tr.buffer) {
+            if tcp_packet.get_destination() == packet_info.my_port {
+                let target_port = tcp_packet.get_source();
+                match packet_info.scan_type {
+                    ScanType::SynScan => {
+                        if tcp_packet.get_flags() == tcp::TcpFlags::SYN | tcp::TcpFlags::ACK {
+                            println!("port {} is open", target_port);
                         }
-                        _ => continue
-                    };
-
-                    if tcp.get_destination() == packet_info.my_port {
-                        let target_port = tcp.get_source();
-                        match packet_info.scan_type {
-                            ScanType::SynScan => {
-                                if tcp.get_flags() == tcp::TcpFlags::SYN | tcp::TcpFlags::ACK {
-                                    println!("port {} is open", target_port);
-                                }
-                            },
-                            ScanType::FinScan | ScanType::XmasScan | ScanType::NullScan => {
-                                reply_ports.push(target_port);
-                            },
-                        }
-                        if target_port == MAXIMUM_PORT_NUM {
-                            match packet_info.scan_type {
-                                ScanType::FinScan | ScanType::XmasScan | ScanType::NullScan => {
-                                    for i in 1..MAXIMUM_PORT_NUM+1 {
-                                        match reply_ports.iter().find(|&&x| x == i) {
-                                            None => {
-                                                println!("port {} is open", i);
-                                            },
-                                            _ => {}
-                                        }
-                                    }
-                                },
-                                _ => {}
-                            }
-                            return;
-                        }
-                    }
+                    },
+                    ScanType::FinScan | ScanType::XmasScan | ScanType::NullScan => {
+                        reply_ports.push(target_port);
+                    },
                 }
-            },
-            _ => continue
+                if target_port == MAXIMUM_PORT_NUM {
+                    match packet_info.scan_type {
+                        ScanType::FinScan | ScanType::XmasScan | ScanType::NullScan => {
+                            for i in 1..MAXIMUM_PORT_NUM+1 {
+                                match reply_ports.iter().find(|&&x| x == i) {
+                                    None => {
+                                        println!("port {} is open", i);
+                                    },
+                                    _ => {}
+                                }
+                            }
+                        },
+                        _ => {}
+                    }
+                    return;
+                }
+            }
         }
+        tr.buffer = Vec::new();
     }
 }
 
