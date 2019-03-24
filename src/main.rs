@@ -84,7 +84,7 @@ fn reregister_destination_port(target: u16, tcp_header: &mut tcp::MutableTcpPack
 // パケットを受信してスキャン結果を出力する。
 fn receive_packets(tr: &mut transport::TransportReceiver, packet_info: &PacketInfo) {
     let mut reply_ports = Vec::new();
-    let mut ip_packet_iter = transport::ipv4_packet_iter(tr);
+    let mut packet_iter = transport::tcp_packet_iter(tr);
     loop {
         if let Ok((tcp_packet, _)) = packet_iter.next() {
             if tcp_packet.get_destination() == packet_info.my_port {
@@ -128,6 +128,7 @@ fn receive_packets(tr: &mut transport::TransportReceiver, packet_info: &PacketIn
                     }
                 }
             }
+        }
     }
 }
 
