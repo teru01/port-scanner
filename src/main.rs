@@ -20,8 +20,7 @@ struct PacketInfo {
 enum ScanType {
     Syn = tcp::TcpFlags::SYN as isize,
     Fin = tcp::TcpFlags::FIN as isize,
-    Xmas =
-        tcp::TcpFlags::FIN as isize | tcp::TcpFlags::URG as isize | tcp::TcpFlags::PSH as isize,
+    Xmas = (tcp::TcpFlags::FIN | tcp::TcpFlags::URG | tcp::TcpFlags::PSH) as isize,
     Null = 0,
 }
 
@@ -32,7 +31,7 @@ fn main() {
         std::process::exit(1);
     }
 
-    let mut packet_info: PacketInfo = {
+    let packet_info = {
         let contents = fs::read_to_string(".env").expect("Failed to read env file");
         let lines: Vec<_> = contents.split('\n').collect();
         let mut map = collections::HashMap::new();
@@ -48,25 +47,24 @@ fn main() {
                 .expect("missing my_ipaddr")
                 .parse()
                 .expect("invalid ipaddr"),
-            target_ipaddr: "0.0.0.0".parse().unwrap(),
+            target_ipaddr: args[1].parse().expect("invalid target ipaddr"),
             my_port: map
                 .get("MY_PORT")
                 .expect("missing my_port")
                 .parse()
                 .expect("invalid port number"),
-            scan_type: ScanType::Syn,
+            scan_type: match args[2].as_str() {
+                "sS" => ScanType::Syn,
+                "sF" => ScanType::Fin,
+                "sX" => ScanType::Xmas,
+                "sN" => ScanType::Null,
+                _ => panic!("Undefined scan method"),
+            },
         }
     };
 
-    packet_info.target_ipaddr = args[1].parse().expect("invalid target ipaddr");
-    packet_info.scan_type = match args[2].as_str() {
-        "sS" => ScanType::Syn,
-        "sF" => ScanType::Fin,
-        "sX" => ScanType::Xmas,
-        "sN" => ScanType::Null,
-        _ => panic!("Undefined scan method"),
-    };
-
+    // トランスポート層のチャンネルを開く。
+    // 内部的にはソケット。
     let (mut ts, mut tr) = transport::transport_channel(
         1024,
         transport::TransportChannelType::Layer4(TransportProtocol::Ipv4(
@@ -75,6 +73,7 @@ fn main() {
     )
     .unwrap();
 
+    // パケットの送信と受信を並行に行う。
     rayon::join(
         || send_packet(&mut ts, &packet_info),
         || receive_packets(&mut tr, &packet_info),
@@ -90,8 +89,8 @@ fn send_packet(
 ) -> Result<(), failure::Error> {
     let mut packet = build_packet(packet_info);
     for i in 1..=MAXIMUM_PORT_NUM {
-        let mut tcp_header =
-            tcp::MutableTcpPacket::new(&mut packet).ok_or_else(|| failure::err_msg("invalid packet"))?;
+        let mut tcp_header = tcp::MutableTcpPacket::new(&mut packet)
+            .ok_or_else(|| failure::err_msg("invalid packet"))?;
         reregister_destination_port(i, &mut tcp_header, packet_info);
         thread::sleep(time::Duration::from_millis(5));
         ts.send_to(tcp_header, net::IpAddr::V4(packet_info.target_ipaddr))?;
