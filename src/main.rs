@@ -73,7 +73,7 @@ fn main() {
         1024,
         TransportChannelType::Layer4(TransportProtocol::Ipv4(IpNextHeaderProtocols::Tcp)),
     )
-    .unwrap();
+    .expect("Failed to open channel.");
 
     // パケットの送信と受信を並行に行う。
     rayon::join(
