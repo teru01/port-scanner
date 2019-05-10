@@ -13,12 +13,12 @@ use std::{env, fs, thread};
 extern crate log;
 
 const TCP_SIZE: usize = 20;
-const MAXIMUM_PORT_NUM: u16 = 1023;
 
 struct PacketInfo {
     my_ipaddr: Ipv4Addr,
     target_ipaddr: Ipv4Addr,
     my_port: u16,
+    maximum_port: u16,
     scan_type: ScanType,
 }
 
@@ -50,23 +50,21 @@ fn main() {
             }
         }
         PacketInfo {
-            my_ipaddr: map
-                .get("MY_IPADDR")
-                .expect("missing my_ipaddr")
-                .parse()
-                .expect("invalid ipaddr"),
+            my_ipaddr: map["MY_IPADDR"].parse().expect("invalid ipaddr"),
             target_ipaddr: args[1].parse().expect("invalid target ipaddr"),
-            my_port: map
-                .get("MY_PORT")
-                .expect("missing my_port")
+            my_port: map["MY_PORT"].parse().expect("invalid port number"),
+            maximum_port: map["MAXIMUM_PORT_NUM"]
                 .parse()
-                .expect("invalid port number"),
+                .expect("invalid maximum port num"),
             scan_type: match args[2].as_str() {
                 "sS" => ScanType::Syn,
                 "sF" => ScanType::Fin,
                 "sX" => ScanType::Xmas,
                 "sN" => ScanType::Null,
-                _ => panic!("Undefined scan method"),
+                _ => {
+                    error!("Undefined scan method");
+                    std::process::exit(1);
+                }
             },
         }
     };
@@ -89,12 +87,9 @@ fn main() {
 /**
  * 指定のレンジにパケットを送信
  */
-fn send_packet(
-    ts: &mut TransportSender,
-    packet_info: &PacketInfo,
-) -> Result<(), failure::Error> {
+fn send_packet(ts: &mut TransportSender, packet_info: &PacketInfo) -> Result<(), failure::Error> {
     let mut packet = build_packet(packet_info);
-    for i in 1..=MAXIMUM_PORT_NUM {
+    for i in 1..=packet_info.maximum_port {
         let mut tcp_header =
             MutableTcpPacket::new(&mut packet).ok_or_else(|| failure::err_msg("invalid packet"))?;
         reregister_destination_port(i, &mut tcp_header, packet_info);
@@ -157,13 +152,13 @@ fn receive_packets(
             }
         }
 
-        // 手抜き：スキャン対象の最後のポートに対する返信が帰ってこれば終了
-        if target_port != MAXIMUM_PORT_NUM {
+        /* [1] 手抜き：スキャン対象の最後のポートに対する返信が帰ってこれば終了 */
+        if target_port != packet_info.maximum_port {
             continue;
         }
         match packet_info.scan_type {
             ScanType::Fin | ScanType::Xmas | ScanType::Null => {
-                for i in 1..=MAXIMUM_PORT_NUM {
+                for i in 1..=packet_info.maximum_port {
                     if reply_ports.iter().find(|&&x| x == i).is_none() {
                         println!("port {} is open", i);
                     }
