@@ -1,5 +1,3 @@
-extern crate rayon;
-
 use pnet::packet::ip::IpNextHeaderProtocols;
 use pnet::packet::tcp::{self, MutableTcpPacket, TcpFlags};
 use pnet::transport::{
