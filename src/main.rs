@@ -8,7 +8,7 @@ use pnet::transport::{
 use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr};
 use std::time::Duration;
-use std::{env, fs, thread};
+use std::{env, fs, thread, process};
 #[macro_use]
 extern crate log;
 
@@ -36,7 +36,7 @@ fn main() {
     let args: Vec<String> = env::args().collect();
     if args.len() != 3 {
         error!("Bad nunber of arguemnts. [ipaddr] [scantype]");
-        std::process::exit(1);
+        process::exit(1);
     }
 
     let packet_info = {
@@ -62,8 +62,8 @@ fn main() {
                 "sX" => ScanType::Xmas,
                 "sN" => ScanType::Null,
                 _ => {
-                    error!("Undefined scan method");
-                    std::process::exit(1);
+                    error!("Undefined scan method, only accept [sS|sF|sN|sX].");
+                    process::exit(1);
                 }
             },
         }
