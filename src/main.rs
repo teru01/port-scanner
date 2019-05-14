@@ -6,7 +6,7 @@ use pnet::transport::{
 use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr};
 use std::time::Duration;
-use std::{env, fs, thread, process};
+use std::{env, fs, process, thread};
 #[macro_use]
 extern crate log;
 
@@ -85,7 +85,10 @@ fn main() {
 /**
  * 指定のレンジにパケットを送信
  */
-fn send_packet(ts: &mut TransportSender, packet_info: &PacketInfo) -> Result<(), failure::Error> {
+fn send_packet(
+    ts: &mut TransportSender,
+    packet_info: &PacketInfo
+) -> Result<(), failure::Error> {
     let mut packet = build_packet(packet_info);
     for i in 1..=packet_info.maximum_port {
         let mut tcp_header =
