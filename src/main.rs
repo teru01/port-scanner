@@ -33,7 +33,7 @@ fn main() {
     env_logger::init();
     let args: Vec<String> = env::args().collect();
     if args.len() != 3 {
-        error!("Bad nunber of arguemnts. [ipaddr] [scantype]");
+        error!("Bad nunber of arguments. [ipaddr] [scantype]");
         process::exit(1);
     }
 
