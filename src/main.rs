@@ -25,7 +25,7 @@ enum ScanType {
 fn main() {
     let args: Vec<String> = env::args().collect();
     if args.len() != 3 {
-        eprintln!("Bad nunber of arguemnts");
+        eprintln!("Bad number of arguments");
         std::process::exit(1);
     }
 
